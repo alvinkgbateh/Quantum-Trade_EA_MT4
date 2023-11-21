@@ -1,0 +1,108 @@
+// Quantum Trade EA MT4
+// Version 2.0
+// Copyright 2023 All Rights Reserved
+
+#include <Trade\Trade.mq4>
+#include <Indicators\iMA.mq4>
+#include <Indicators\RSI.mq4>
+
+// Input parameters
+extern double EntryDistance;
+extern double ExitDistance;
+extern double MagicNumber;
+extern double TrailingStopLossDistance;
+extern double RSIThreshold;
+
+// Global variables
+double g_OpenPrice = 0;
+double g_PreviousPrice = 0;
+double g_MA200 = 0;
+double g_RSI = 0;
+double g_TrailingStopLoss = 0;
+
+// OnInit function
+int OnInit()
+{
+    // Initialize global variables
+    g_OpenPrice = 0;
+    g_PreviousPrice = 0;
+    g_MA200 = iMA(Symbol(), PERIOD_CURRENT, 0, MODE_SMA, 200, 0, PRICE_CLOSE, 0);
+    g_RSI = iRSI(Symbol(), PERIOD_CURRENT, 14, 0, PRICE_CLOSE);
+
+    // Check if the EA is attached to the correct chart
+    if (Symbol() != "EURUSD")
+    {
+        Print("This EA is only designed to work on the EURUSD pair.");
+        return(INIT_FAILED);
+    }
+
+    // Check if the correct timeframe is selected
+    if (Period() != PERIOD_H1)
+    {
+        Print("This EA is only designed to work on the H1 timeframe.");
+        return(INIT_FAILED);
+    }
+
+    // Return success
+    return(INIT_SUCCEEDED);
+}
+
+// OnTick function
+void OnTick()
+{
+    // Check if the current bar is closed
+    if (iBars() < 2)
+    {
+        return;
+    }
+
+    // Get the current price
+    double CurrentPrice = NormalizeDouble(SymbolInfoDouble(Symbol(), SYMBOL_ASK), Digits);
+
+    // Update the previous price
+    g_PreviousPrice = CurrentPrice;
+
+    // Calculate the RSI
+    g_RSI = iRSI(Symbol(), PERIOD_CURRENT, 14, 0, PRICE_CLOSE);
+
+    // Update the trailing stop loss
+    if (OrderLots() > 0)
+    {
+        g_TrailingStopLoss = Max(g_TrailingStopLoss, g_OpenPrice - TrailingStopLossDistance);
+
+        OrderModify(OrderTicket(), OrderBalance(), g_TrailingStopLoss, 0, 0, -1);
+    }
+
+    // Check for a breakout to the upside
+    if (CurrentPrice > g_OpenPrice + EntryDistance && CurrentPrice > g_MA200 && g_RSI < RSIThreshold)
+    {
+        // Open a long trade
+        OrderSend(Symbol(), OP_BUY, 0.1, CurrentPrice, 3, 0, 0, "Quantum Trade EA", MagicNumber, 0, Green);
+
+        // Update the open price
+        g_OpenPrice = CurrentPrice;
+    }
+
+    // Check for a breakout to the downside
+    if (CurrentPrice < g_OpenPrice - EntryDistance && CurrentPrice < g_MA200 && g_RSI > RSIThreshold)
+    {
+        // Open a short trade
+        OrderSend(Symbol(), OP_SELL, 0.1, CurrentPrice, 3, 0, 0, "Quantum Trade EA", MagicNumber, 0, Red);
+
+        // Update the open price
+        g_OpenPrice = CurrentPrice;
+    }
+
+    // Check for trades that need to be closed
+    for (int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        OrderSelect(i);
+
+        // Check if the order is still open
+        if (OrderMagicNumber() == MagicNumber && OrderProfit() >= ExitDistance)
+        {
+            // Close the trade
+            OrderClose(OrderTicket(), OrderLots(), OrderAsk(), slip, clrGreen, 0);
+        }
+    }
+}
