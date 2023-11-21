@@ -1,0 +1,106 @@
+// Quantum Trade EA MT4
+// Version 2.0
+// Copyright 2023 All Rights Reserved
+
+#include <Trade\Trade.mq4>
+#include <Indicators\iMA.mq4>
+#include <Indicators\RSI.mq4>
+
+// Input parameters
+extern double EntryDistance;
+extern double ExitDistance;
+extern double MagicNumber;
+extern double TrailingStopLossDistance;
+extern double RSIThreshold;
+extern double RiskPercentage = 2;
+extern double MaxDrawdown = 0.05;
+
+// Global variables
+double g_OpenPrice = 0;
+double g_PreviousPrice = 0;
+double g_MA200 = 0;
+double g_RSI = 0;
+double g_TrailingStopLoss = 0;
+
+// OnInit function
+int OnInit() {
+    g_OpenPrice = 0;
+    g_PreviousPrice = 0;
+    g_MA200 = iMA(Symbol(), PERIOD_CURRENT, 0, MODE_SMA, 200, 0, PRICE_CLOSE, 0);
+    g_RSI = iRSI(Symbol(), PERIOD_CURRENT, 14, 0, PRICE_CLOSE);
+
+    if (Symbol() != "EURUSD") {
+        Print("This EA is only designed to work on the EURUSD pair.");
+        return(INIT_FAILED);
+    }
+
+    if (Period() != PERIOD_H1) {
+        Print("This EA is only designed to work on the H1 timeframe.");
+        return(INIT_FAILED);
+    }
+
+    return(INIT_SUCCEEDED);
+}
+
+// OnTick function
+void OnTick() {
+    if (iBars() < 2) {
+        return;
+    }
+
+    double CurrentPrice = NormalizeDouble(SymbolInfoDouble(Symbol(), SYMBOL_ASK), Digits);
+
+    if (g_MA200 == 0 || g_RSI == 0) {
+        Print("Error fetching indicator values. Skipping trade decisions.");
+        return;
+    }
+
+    g_PreviousPrice = CurrentPrice;
+    g_RSI = iRSI(Symbol(), PERIOD_CURRENT, 14, 0, PRICE_CLOSE);
+
+    if (OrderLots() > 0) {
+        g_TrailingStopLoss = Max(g_TrailingStopLoss, g_OpenPrice - TrailingStopLossDistance);
+        OrderModify(OrderTicket(), OrderBalance(), g_TrailingStopLoss, 0, 0, -1);
+    }
+
+    double accountEquity = AccountEquity();
+    double lotSize = NormalizeDouble((accountEquity * RiskPercentage) / (ExitDistance * 100), 2);
+
+    if (lotSize > AccountFreeMarginCheck(Symbol(), OP_BUY, lotSize)) {
+        Print("Risk exceeds maximum allowable. Skipping trade.");
+        return;
+    }
+
+    if (Hour() < 8 || Hour() > 16) {
+        Print("Not trading during inactive hours.");
+        return;
+    }
+
+    if (CurrentPrice > g_OpenPrice + EntryDistance && CurrentPrice > g_MA200 && g_RSI < RSIThreshold) {
+        OrderSend(Symbol(), OP_BUY, 0.1, CurrentPrice, 3, 0, 0, "Quantum Trade EA", MagicNumber, 0, Green);
+        g_OpenPrice = CurrentPrice;
+    }
+
+    if (CurrentPrice < g_OpenPrice - EntryDistance && CurrentPrice < g_MA200 && g_RSI > RSIThreshold) {
+        OrderSend(Symbol(), OP_SELL, 0.1, CurrentPrice, 3, 0, 0, "Quantum Trade EA", MagicNumber, 0, Red);
+        g_OpenPrice = CurrentPrice;
+    }
+
+    double currentATR = iATR(Symbol(), PERIOD_CURRENT, 14, 0);
+    double dynamicStopLoss = CurrentPrice - (currentATR * 2);
+
+    for (int i = OrdersTotal() - 1; i >= 0; i--) {
+        OrderSelect(i);
+        
+        if (!OrderSend(...) || !OrderModify(...) || !OrderClose(...)) {
+            int errorCode = GetLastError();
+            Print("Order error: ", ErrorDescription(errorCode));
+            // Handle error (e.g., retry or stop trading)
+            return;
+        }
+
+        if (OrderMagicNumber() == MagicNumber && OrderProfit() >= ExitDistance) {
+            OrderClose(OrderTicket(), OrderLots(), OrderAsk(), slip, clrGreen, 0);
+        }
+    }
+}
